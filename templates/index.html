@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>OptiGuide Chatbot</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    #chatbox { border: 1px solid #ccc; padding: 1rem; height: 300px; overflow-y: scroll; }
+    #user-input { width: 80%; padding: 0.5rem; }
+    #send-btn { padding: 0.5rem 1rem; }
+    .user-msg { text-align: right; color: blue; margin: 0.5rem 0; }
+    .bot-msg { text-align: left; color: green; margin: 0.5rem 0; }
+  </style>
+</head>
+<body>
+  <h2>OptiGuide Chatbot</h2>
+  <div id="chatbox"></div>
+  <input type="text" id="user-input" placeholder="Ask me anything..." />
+  <button id="send-btn">Send</button>
+
+  <script>
+    const chatbox = document.getElementById('chatbox');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    function appendMessage(message, className) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = className;
+      msgDiv.textContent = message;
+      chatbox.appendChild(msgDiv);
+      chatbox.scrollTop = chatbox.scrollHeight;
+    }
+
+    async function sendQuery() {
+      const query = userInput.value.trim();
+      if (!query) return;
+      appendMessage(`You: ${query}`, 'user-msg');
+      userInput.value = '';
+      
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          appendMessage(`Bot: ${data.error}`, 'bot-msg');
+        } else {
+          // Format response if object/array
+          let responseText = '';
+          if (typeof data.response === 'string') {
+            responseText = data.response;
+          } else {
+            responseText = JSON.stringify(data.response, null, 2);
+          }
+          appendMessage(`Bot: ${responseText}`, 'bot-msg');
+        }
+      } catch (err) {
+        appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg');
+      }
+    }
+
+    sendBtn.addEventListener('click', sendQuery);
+    userInput.addEventListener('keypress', e => {
+      if (e.key === 'Enter') sendQuery();
+    });
+  </script>
+</body>
+</html>
