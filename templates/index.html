@@ -3,25 +3,36 @@
 <head>
   <meta charset="UTF-8" />
   <title>OptiGuide Chatbot</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; }
-    #chatbox { border: 1px solid #ccc; padding: 1rem; height: 300px; overflow-y: scroll; }
-    #user-input { width: 80%; padding: 0.5rem; }
-    #send-btn { padding: 0.5rem 1rem; }
-    .user-msg { text-align: right; color: blue; margin: 0.5rem 0; }
-    .bot-msg { text-align: left; color: green; margin: 0.5rem 0; }
-  </style>
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <h2>OptiGuide Chatbot</h2>
-  <div id="chatbox"></div>
-  <input type="text" id="user-input" placeholder="Ask me anything..." />
-  <button id="send-btn">Send</button>
+  <div id="container">
+    <div id="left-panel">
+      <div id="visualization">
+        <h3>Visualization</h3>
+        <div class="placeholder">Map or Chart will appear here</div>
+      </div>
+      <div id="json-output">
+        <h3>Raw JSON Output</h3>
+        <table id="json-table"></table>
+        <pre id="json-raw"></pre>
+      </div>
+    </div>
+
+    <div id="right-panel">
+      <div id="chatbox"></div>
+      <input type="text" id="user-input" placeholder="Ask me anything..." />
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
 
   <script>
     const chatbox = document.getElementById('chatbox');
     const userInput = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
+    const jsonTable = document.getElementById('json-table');
+    const jsonRaw = document.getElementById('json-raw');
 
     function appendMessage(message, className) {
       const msgDiv = document.createElement('div');
@@ -31,12 +42,73 @@
       chatbox.scrollTop = chatbox.scrollHeight;
     }
 
+    function clearJsonDisplay() {
+      jsonTable.innerHTML = '';
+      jsonRaw.textContent = '';
+    }
+
+    function renderJsonTable(data) {
+      if (!data) return;
+      clearJsonDisplay();
+
+      if (Array.isArray(data)) {
+        // If array of objects, create table headers from keys
+        if (data.length === 0) {
+          jsonRaw.textContent = 'Empty array';
+          return;
+        }
+        const headers = Object.keys(data[0]);
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        headers.forEach(h => {
+          const th = document.createElement('th');
+          th.textContent = h;
+          headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        jsonTable.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        data.forEach(item => {
+          const row = document.createElement('tr');
+          headers.forEach(h => {
+            const td = document.createElement('td');
+            td.textContent = item[h];
+            row.appendChild(td);
+          });
+          tbody.appendChild(row);
+        });
+        jsonTable.appendChild(tbody);
+
+      } else if (typeof data === 'object') {
+        // If object, display key-value pairs
+        const tbody = document.createElement('tbody');
+        Object.entries(data).forEach(([key, value]) => {
+          const row = document.createElement('tr');
+          const keyTd = document.createElement('td');
+          keyTd.textContent = key;
+          const valTd = document.createElement('td');
+          valTd.textContent = JSON.stringify(value);
+          row.appendChild(keyTd);
+          row.appendChild(valTd);
+          tbody.appendChild(row);
+        });
+        jsonTable.appendChild(tbody);
+
+      } else {
+        // Fallback: show raw JSON string
+        jsonRaw.textContent = JSON.stringify(data, null, 2);
+      }
+    }
+
     async function sendQuery() {
       const query = userInput.value.trim();
       if (!query) return;
       appendMessage(`You: ${query}`, 'user-msg');
       userInput.value = '';
-      
+
+      clearJsonDisplay();
+
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
@@ -44,17 +116,12 @@
           body: JSON.stringify({ query }),
         });
         const data = await res.json();
+
         if (data.error) {
           appendMessage(`Bot: ${data.error}`, 'bot-msg');
         } else {
-          // Format response if object/array
-          let responseText = '';
-          if (typeof data.response === 'string') {
-            responseText = data.response;
-          } else {
-            responseText = JSON.stringify(data.response, null, 2);
-          }
-          appendMessage(`Bot: ${responseText}`, 'bot-msg');
+          appendMessage(`Bot: ${data.nlg}`, 'bot-msg');
+          renderJsonTable(data.result);
         }
       } catch (err) {
         appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg');

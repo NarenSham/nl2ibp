@@ -22,8 +22,16 @@ def chat():
     if not user_query:
         return jsonify({"error": "No query provided"}), 400
 
-    response = parse_query(user_query)
-    return jsonify({"response": response})
+    parsed = parse_query(user_query)  # dict with keys 'result' and 'nlg'
+
+    nlg_text = parsed.get("nlg", "")
+    if not isinstance(nlg_text, str):
+        nlg_text = str(nlg_text)
+
+    return jsonify({
+        "response": parsed.get("result"),
+        "nlg": nlg_text
+    })
 
 
 if __name__ == "__main__":

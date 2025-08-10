@@ -3,6 +3,7 @@ from transformers import pipeline
 import sqlite3
 import re
 import math
+from .nlg import generate_nlg  # import your NLG function
 
 DB_PATH = "db/optiguide.db"
 
@@ -54,56 +55,66 @@ def parse_query(user_input):
     if top_label == "list retailers":
         rows = cursor.execute("SELECT * FROM retailers").fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        nlg = generate_nlg(result, intent="list_retailers")
+        return {"result": result, "nlg": nlg}
 
     elif top_label == "list warehouses":
         rows = cursor.execute("SELECT * FROM warehouses").fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        nlg = generate_nlg(result, intent="list_warehouses")
+        return {"result": result, "nlg": nlg}
 
     elif top_label == "find routes":
         match = re.search(r"under cost (\d+)", user_input)
         cost_limit = float(match.group(1)) if match else math.inf
         rows = cursor.execute("SELECT * FROM routes WHERE cost < ?", (cost_limit,)).fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        nlg = generate_nlg(result, intent="find_routes")
+        return {"result": result, "nlg": nlg}
 
     elif top_label == "calculate demand":
         warehouse_name = _find_warehouse_in_text(user_input, conn)
         if not warehouse_name:
             conn.close()
-            return "Please specify a warehouse name."
+            nlg = "Please specify a warehouse name."
+            return {"result": {}, "nlg": nlg}
 
         w = cursor.execute(
             "SELECT latitude, longitude FROM warehouses WHERE name = ?", (warehouse_name,)
         ).fetchone()
         if not w:
             conn.close()
-            return f"No warehouse found with name {warehouse_name}"
+            nlg = f"No warehouse found with name {warehouse_name}"
+            return {"result": {}, "nlg": nlg}
 
         w_lat, w_lon = w["latitude"], w["longitude"]
         retailers = cursor.execute("SELECT * FROM retailers").fetchall()
         nearby = [r for r in retailers if _haversine(w_lat, w_lon, r["latitude"], r["longitude"]) <= 10]
         total_demand = sum(r["demand"] for r in nearby)
         conn.close()
-        return {
+        result = {
             "warehouse": warehouse_name,
             "nearby_retailers": len(nearby),
             "total_demand": total_demand
         }
+        nlg = generate_nlg(result, intent="calculate_demand")
+        return {"result": result, "nlg": nlg}
 
     elif top_label == "what if":
         constraints = constraint_parser(user_input)
         from optimizer.solver import solve_routing
         result = solve_routing(constraints=constraints)
         conn.close()
-        return result
+        nlg = generate_nlg(result, intent="what_if")
+        return {"result": result, "nlg": nlg}
 
     else:
         conn.close()
-        return {"error": "Sorry, I couldn't understand the query."}
-
-
+        nlg = "Sorry, I couldn't understand your request."
+        return {"result": {}, "nlg": nlg}
 # ===== Helpers =====
 def _find_warehouse_in_text(user_input, conn):
     warehouses = conn.execute("SELECT name FROM warehouses").fetchall()
