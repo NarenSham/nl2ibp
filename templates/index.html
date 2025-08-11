@@ -4,9 +4,36 @@
   <meta charset="UTF-8" />
   <title>OptiGuide Chatbot</title>
   <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    #scenario-indicator {
+      display: none;
+      padding: 8px;
+      margin-bottom: 10px;
+      background-color: #ffeb3b;
+      color: #333;
+      font-weight: bold;
+      border-radius: 4px;
+      text-align: center;
+    }
+    #scenario-buttons {
+      margin-bottom: 10px;
+    }
+    button {
+      margin-right: 8px;
+      padding: 6px 12px;
+      font-size: 14px;
+    }
+  </style>
 </head>
 <body>
   <h2>OptiGuide Chatbot</h2>
+
+  <div id="scenario-indicator">⚠️ Scenario Mode Active</div>
+  <div id="scenario-buttons">
+    <button id="start-scenario-btn">Start Scenario</button>
+    <button id="save-scenario-btn" disabled>Save Scenario</button>
+  </div>
+
   <div id="container">
     <div id="left-panel">
       <div id="visualization">
@@ -34,6 +61,13 @@
     const jsonTable = document.getElementById('json-table');
     const jsonRaw = document.getElementById('json-raw');
 
+    const startScenarioBtn = document.getElementById('start-scenario-btn');
+    const saveScenarioBtn = document.getElementById('save-scenario-btn');
+    const scenarioIndicator = document.getElementById('scenario-indicator');
+
+    let scenarioActive = false;
+    let activeScenarioId = null;
+
     function appendMessage(message, className) {
       const msgDiv = document.createElement('div');
       msgDiv.className = className;
@@ -52,7 +86,6 @@
       clearJsonDisplay();
 
       if (Array.isArray(data)) {
-        // If array of objects, create table headers from keys
         if (data.length === 0) {
           jsonRaw.textContent = 'Empty array';
           return;
@@ -81,7 +114,6 @@
         jsonTable.appendChild(tbody);
 
       } else if (typeof data === 'object') {
-        // If object, display key-value pairs
         const tbody = document.createElement('tbody');
         Object.entries(data).forEach(([key, value]) => {
           const row = document.createElement('tr');
@@ -96,7 +128,6 @@
         jsonTable.appendChild(tbody);
 
       } else {
-        // Fallback: show raw JSON string
         jsonRaw.textContent = JSON.stringify(data, null, 2);
       }
     }
@@ -121,7 +152,7 @@
           appendMessage(`Bot: ${data.error}`, 'bot-msg');
         } else {
           appendMessage(`Bot: ${data.nlg}`, 'bot-msg');
-          renderJsonTable(data.result);
+          renderJsonTable(data.response);
         }
       } catch (err) {
         appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg');
@@ -131,6 +162,58 @@
     sendBtn.addEventListener('click', sendQuery);
     userInput.addEventListener('keypress', e => {
       if (e.key === 'Enter') sendQuery();
+    });
+
+    // Scenario buttons handlers
+    startScenarioBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/scenario/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'started') {
+          scenarioActive = true;
+          activeScenarioId = data.scenario_id;
+          scenarioIndicator.style.display = 'block';
+          saveScenarioBtn.disabled = false;
+          appendMessage("System: Scenario mode started.", 'system-msg');
+        }
+      } catch (err) {
+        appendMessage(`System: Failed to start scenario mode: ${err}`, 'system-msg');
+      }
+    });
+
+    saveScenarioBtn.addEventListener('click', async () => {
+      if (!scenarioActive || !activeScenarioId) {
+        appendMessage("System: No active scenario to save.", "system-msg");
+        return;
+      }
+
+      // TODO: Replace with actual override data from UI/input
+      const overrides = [
+        {
+          table_name: "retailers",
+          row_id: 1,
+          column_name: "demand",
+          override_value: "120"
+        }
+      ];
+
+      try {
+        const res = await fetch('/api/scenario/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scenario_id: activeScenarioId, overrides }),
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.status === 'saved') {
+          appendMessage("System: Scenario saved successfully.", 'system-msg');
+        } else {
+          appendMessage(`System: Failed to save scenario: ${data.error || 'Unknown error'}`, 'system-msg');
+        }
+      } catch (err) {
+        appendMessage(`System: Failed to save scenario: ${err}`, 'system-msg');
+      }
     });
   </script>
 </body>
