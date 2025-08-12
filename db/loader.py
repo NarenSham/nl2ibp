@@ -31,19 +31,19 @@ def init_db():
     ]
 
     scenarios = [
-    (1, "Default Scenario", "Baseline dataset", "2025-08-10")
+        (1, "Default Scenario", "Baseline dataset", "2025-08-10")
     ]
-    
+
     scenario_overrides = [
-    # Example: retailer 1 demand changed from 100 to 120
-    (1, 1, "retailers", 1, "demand", "120")]
+        # Example: retailer 1 demand changed from 100 to 120
+        (1, 1, "retailers", 1, "demand", "120")
+    ]
 
     cursor.executemany("INSERT INTO warehouses VALUES (?, ?, ?, ?);", warehouses)
     cursor.executemany("INSERT INTO retailers VALUES (?, ?, ?, ?, ?);", retailers)
     cursor.executemany("INSERT INTO routes VALUES (?, ?, ?, ?);", routes)
     cursor.executemany("INSERT INTO scenario VALUES (?, ?, ?, ?);", scenarios)
     cursor.executemany("INSERT INTO scenario_overrides VALUES (?, ?, ?, ?, ?, ?);", scenario_overrides)
-
 
     conn.commit()
     conn.close()
