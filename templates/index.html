@@ -42,6 +42,14 @@
         <input type="text" id="scenario-name-input" placeholder="Enter scenario name" />
       </label>
     </div>
+    <label>
+      Scenario Type:<br/>
+      <select id="scenario-type-select">
+        <option value="tpo" selected>Trade Promotion (TPO)</option>
+        <option value="finance">Finance</option>
+        <option value="supply">Supply</option>
+      </select>
+    </label>
 
     <div id="existing-scenario-container" style="display:none;">
       <label>Choose scenario to overwrite:<br/>
@@ -95,22 +103,26 @@
     const sendBtn = document.getElementById('send-btn');
     const jsonTable = document.getElementById('json-table');
     const jsonRaw = document.getElementById('json-raw');
+    
     const saveScenarioModal = document.getElementById("save-scenario-modal");
     const modalOverlay = document.getElementById("modal-overlay");
     const saveScenarioForm = document.getElementById("save-scenario-form");
     const scenarioNameInput = document.getElementById("scenario-name-input");
+    const scenarioTypeSelect = document.getElementById("scenario-type-select");
+    
     const existingScenarioContainer = document.getElementById("existing-scenario-container");
     const newNameContainer = document.getElementById("new-name-container");
     const existingScenarioSelect = document.getElementById("existing-scenario-select");
     const cancelSaveBtn = document.getElementById("cancel-save-btn");
-
+    
     const startScenarioBtn = document.getElementById('start-scenario-btn');
     const saveScenarioBtn = document.getElementById('save-scenario-btn');
     const scenarioIndicator = document.getElementById('scenario-indicator');
-
+    
     let scenarioActive = false;
     let activeScenarioId = null;
-
+    let scenarioChanges = [];
+    
     function appendMessage(message, className) {
       const msgDiv = document.createElement('div');
       msgDiv.className = className;
@@ -118,215 +130,124 @@
       chatbox.appendChild(msgDiv);
       chatbox.scrollTop = chatbox.scrollHeight;
     }
-
+    
     function clearJsonDisplay() {
       jsonTable.innerHTML = '';
       jsonRaw.textContent = '';
     }
-
+    
     function renderJsonTable(data) {
       if (!data) return;
       clearJsonDisplay();
-
-      if (Array.isArray(data)) {
-        if (data.length === 0) {
-          jsonRaw.textContent = 'Empty array';
-          return;
-        }
+      if (Array.isArray(data) && data.length > 0) {
         const headers = Object.keys(data[0]);
         const thead = document.createElement('thead');
         const headerRow = document.createElement('tr');
-        headers.forEach(h => {
-          const th = document.createElement('th');
-          th.textContent = h;
-          headerRow.appendChild(th);
-        });
-        thead.appendChild(headerRow);
-        jsonTable.appendChild(thead);
-
+        headers.forEach(h => { const th = document.createElement('th'); th.textContent = h; headerRow.appendChild(th); });
+        thead.appendChild(headerRow); jsonTable.appendChild(thead);
         const tbody = document.createElement('tbody');
         data.forEach(item => {
           const row = document.createElement('tr');
-          headers.forEach(h => {
-            const td = document.createElement('td');
-            td.textContent = item[h];
-            row.appendChild(td);
-          });
+          headers.forEach(h => { const td = document.createElement('td'); td.textContent = item[h]; row.appendChild(td); });
           tbody.appendChild(row);
         });
         jsonTable.appendChild(tbody);
-
       } else if (typeof data === 'object') {
         const tbody = document.createElement('tbody');
         Object.entries(data).forEach(([key, value]) => {
           const row = document.createElement('tr');
-          const keyTd = document.createElement('td');
-          keyTd.textContent = key;
-          const valTd = document.createElement('td');
-          valTd.textContent = JSON.stringify(value);
-          row.appendChild(keyTd);
-          row.appendChild(valTd);
+          const keyTd = document.createElement('td'); keyTd.textContent = key;
+          const valTd = document.createElement('td'); valTd.textContent = JSON.stringify(value);
+          row.appendChild(keyTd); row.appendChild(valTd);
           tbody.appendChild(row);
         });
         jsonTable.appendChild(tbody);
-
       } else {
         jsonRaw.textContent = JSON.stringify(data, null, 2);
       }
     }
-
+    
     async function sendQuery() {
-      const query = userInput.value.trim();
-      if (!query) return;
-      appendMessage(`You: ${query}`, 'user-msg');
-      userInput.value = '';
-
-      clearJsonDisplay();
-
+      const query = userInput.value.trim(); if (!query) return;
+      appendMessage(`You: ${query}`, 'user-msg'); userInput.value = ''; clearJsonDisplay();
       try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
-        });
+        const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
         const data = await res.json();
-
-        if (data.error) {
-          appendMessage(`Bot: ${data.error}`, 'bot-msg');
-        } else {
-          appendMessage(`Bot: ${data.nlg}`, 'bot-msg');
-          renderJsonTable(data.response);
-        }
-      } catch (err) {
-        appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg');
-      }
+        if (data.error) appendMessage(`Bot: ${data.error}`, 'bot-msg');
+        else { appendMessage(`Bot: ${data.nlg}`, 'bot-msg'); renderJsonTable(data.response); }
+      } catch (err) { appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg'); }
     }
-
+    
     sendBtn.addEventListener('click', sendQuery);
-    userInput.addEventListener('keypress', e => {
-      if (e.key === 'Enter') sendQuery();
-    });
-
-    // Scenario buttons handlers
+    userInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendQuery(); });
+    
+    // ------------------ Scenario Start ------------------
     startScenarioBtn.addEventListener('click', async () => {
       try {
-        const res = await fetch('/api/scenario/start', { method: 'POST' });
+        const type = scenarioTypeSelect.value;
+        const res = await fetch('/api/scenario/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) });
         const data = await res.json();
         if (data.status === 'started') {
-          scenarioActive = true;
-          activeScenarioId = data.scenario_id;
-          scenarioChanges = [];
-          scenarioIndicator.style.display = 'block';
-          saveScenarioBtn.disabled = false;
+          scenarioActive = true; activeScenarioId = data.scenario_id; scenarioChanges = [];
+          scenarioIndicator.style.display = 'block'; saveScenarioBtn.disabled = false;
           appendMessage("System: Scenario mode started.", 'system-msg');
         }
-      } catch (err) {
-        appendMessage(`System: Failed to start scenario mode: ${err}`, 'system-msg');
-      }
+      } catch (err) { appendMessage(`System: Failed to start scenario mode: ${err}`, 'system-msg'); }
     });
-
+    
+    // ------------------ Scenario Save ------------------
     saveScenarioBtn.addEventListener("click", async () => {
-  // Before showing modal, load existing scenarios
       try {
         const res = await fetch("/api/scenario/list");
         const data = await res.json();
         if (res.ok) {
-          existingScenarioSelect.innerHTML = ""; // clear old
+          existingScenarioSelect.innerHTML = "";
           data.scenarios.forEach(scenario => {
             const option = document.createElement("option");
             option.value = scenario.id;
-            option.textContent = scenario.name;
+            option.textContent = `${scenario.name} (${scenario.type})`;
             existingScenarioSelect.appendChild(option);
           });
           showModal();
-        } else {
-          appendMessage(`System: Failed to fetch scenarios: ${data.error}`, "system-msg");
-        }
-      } catch (err) {
-        appendMessage(`System: Failed to fetch scenarios: ${err}`, "system-msg");
-      }
+        } else appendMessage(`System: Failed to fetch scenarios: ${data.error}`, "system-msg");
+      } catch (err) { appendMessage(`System: Failed to fetch scenarios: ${err}`, "system-msg"); }
     });
-
-    function showModal() {
-      saveScenarioModal.style.display = "block";
-      modalOverlay.style.display = "block";
-      scenarioNameInput.value = "";
-      existingScenarioContainer.style.display = "none";
-      newNameContainer.style.display = "block";
-      saveScenarioForm.saveOption.value = "new"; // default
-    }
-
-    function hideModal() {
-      saveScenarioModal.style.display = "none";
-      modalOverlay.style.display = "none";
-    }
-
-    saveScenarioForm.saveOption.forEach(radio => {
-      radio.addEventListener("change", () => {
-        if (saveScenarioForm.saveOption.value === "overwrite") {
-          existingScenarioContainer.style.display = "block";
-          newNameContainer.style.display = "none";
-        } else {
-          existingScenarioContainer.style.display = "none";
-          newNameContainer.style.display = "block";
-        }
-      });
-    });
-
+    
+    function showModal() { saveScenarioModal.style.display = "block"; modalOverlay.style.display = "block"; scenarioNameInput.value = ""; existingScenarioContainer.style.display = "none"; newNameContainer.style.display = "block"; saveScenarioForm.saveOption.value = "new"; }
+    function hideModal() { saveScenarioModal.style.display = "none"; modalOverlay.style.display = "none"; }
+    
+    saveScenarioForm.saveOption.forEach(radio => { radio.addEventListener("change", () => {
+      if (saveScenarioForm.saveOption.value === "overwrite") { existingScenarioContainer.style.display = "block"; newNameContainer.style.display = "none"; }
+      else { existingScenarioContainer.style.display = "none"; newNameContainer.style.display = "block"; }
+    }); });
+    
     cancelSaveBtn.addEventListener("click", hideModal);
-
+    
     saveScenarioForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-
-      let scenario_id_to_save = null;
-      let scenario_name_to_save = null;
+      let scenario_id_to_save = null; let scenario_name_to_save = null;
       const saveOption = saveScenarioForm.saveOption.value;
-
+      const scenarioType = scenarioTypeSelect.value;
+    
       if (saveOption === "new") {
         scenario_name_to_save = scenarioNameInput.value.trim();
-        if (!scenario_name_to_save) {
-          alert("Please enter a scenario name");
-          return;
-        }
-      } else if (saveOption === "overwrite") {
-        scenario_id_to_save = existingScenarioSelect.value;
-        if (!scenario_id_to_save) {
-          alert("Please select a scenario to overwrite");
-          return;
-        }
-      }
-
-      if (!scenarioActive) {
-        alert("No active scenario to save");
-        return;
-      }
-
+        if (!scenario_name_to_save) { alert("Please enter a scenario name"); return; }
+      } else scenario_id_to_save = existingScenarioSelect.value;
+    
+      if (!scenarioActive) { alert("No active scenario to save"); return; }
+    
       try {
-        const res = await fetch("/api/scenario/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scenario_id: scenario_id_to_save || activeScenarioId,
-            scenario_name: scenario_name_to_save,
-            changes: scenarioChanges
-          }),
-        });
-
+        const res = await fetch("/api/scenario/save", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scenario_id: scenario_id_to_save || activeScenarioId, scenario_name: scenario_name_to_save, type: scenarioType, changes: scenarioChanges }) });
         const data = await res.json();
         if (res.ok && data.status === "saved") {
           appendMessage("System: Scenario saved successfully.", "system-msg");
-          if (saveOption === "new") {
-            activeScenarioId = data.scenario_id; // update to new scenario id returned by backend
-          }
+          if (saveOption === "new") activeScenarioId = data.scenario_id;
           hideModal();
-        } else {
-          appendMessage(`System: Failed to save scenario: ${data.error || "Unknown error"}`, "system-msg");
-        }
-      } catch (err) {
-        appendMessage(`System: Failed to save scenario: ${err}`, "system-msg");
-      }
+        } else appendMessage(`System: Failed to save scenario: ${data.error || "Unknown error"}`, "system-msg");
+      } catch (err) { appendMessage(`System: Failed to save scenario: ${err}`, "system-msg"); }
     });
-
-  </script>
+    </script>
+    
 </body>
 </html>

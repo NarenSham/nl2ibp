@@ -1,19 +1,41 @@
 from flask import Flask, render_template, request, jsonify, session
-import sqlite3
+from models import SessionLocal, Scenario, ScenarioOverride
 from bot.parser import parse_query
+from contextlib import contextmanager
+from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = "your_super_secret_key"
-DB_PATH = "db/optiguide.db"
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Context manager for SQLAlchemy session
+@contextmanager
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+# =====================================
+# Startup: Print scenarios
+# =====================================
+with get_db() as db:
+    scenarios = db.query(Scenario).all()
+    for s in scenarios:
+        print(f"[Startup] Scenario loaded: {s.name} ({s.type})")
+
+# =====================================
+# Routes
+# =====================================
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
@@ -27,7 +49,7 @@ def chat():
     if not isinstance(nlg_text, str):
         nlg_text = str(nlg_text)
 
-    # If scenario active and parse_query tells us a change happened
+    # Track scenario modifications in session
     if "modifications" in parsed and session.get("active_scenario_id"):
         if "scenario_changes" not in session:
             session["scenario_changes"] = []
@@ -38,20 +60,27 @@ def chat():
         "nlg": nlg_text
     })
 
+
 @app.route("/api/scenario/start", methods=["POST"])
 def start_scenario():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO scenario (name, description, created_at) VALUES (?, ?, datetime('now'))",
-        ("New Scenario", "User-created scenario")
-    )
-    scenario_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    data = request.get_json() or {}
+    scenario_type = data.get("type", "tpo")   # type from frontend
+    scenario_name = data.get("name", "New Scenario")
+
+    with get_db() as db:
+        new_scenario = Scenario(
+            name=scenario_name,
+            description="User-created scenario",
+            type=scenario_type,
+            created_at=datetime.utcnow()
+        )
+        db.add(new_scenario)
+        db.flush()
+        scenario_id = new_scenario.scenario_id   # correct ID field
 
     session["active_scenario_id"] = scenario_id
     session["scenario_changes"] = []
+
     return jsonify({"scenario_id": scenario_id, "status": "started"})
 
 
@@ -63,31 +92,39 @@ def load_scenario():
     if not scenario_id:
         return jsonify({"error": "scenario_id required"}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    with get_db() as db:
+        overrides = db.query(ScenarioOverride).filter_by(scenario_id=scenario_id).all()
+        overrides_json = [
+            {
+                "id": o.id,
+                "table_name": o.table_name,
+                "row_id": o.row_id,
+                "column_name": o.column_name,
+                "override_value": o.override_value
+            }
+            for o in overrides
+        ]
 
-    cursor.execute("SELECT * FROM scenario_overrides WHERE scenario_id = ?", (scenario_id,))
-    overrides = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-
-    # Here you’d apply the overrides to your baseline data in memory or in query layer
-    # For now, we just return them
     session["active_scenario_id"] = scenario_id
-    session["scenario_changes"] = overrides
+    session["scenario_changes"] = overrides_json
 
     return jsonify({
         "status": "loaded",
         "scenario_id": scenario_id,
-        "overrides": overrides
+        "overrides": overrides_json
     })
+
+
 @app.route("/api/scenario/list")
 def list_scenarios():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name FROM scenario ORDER BY created_at DESC")
-    scenarios = cursor.fetchall()
-    conn.close()
-    return jsonify({"scenarios": [{"id": s["id"], "name": s["name"]} for s in scenarios]})
+    with get_db() as db:
+        scenarios = db.query(Scenario).order_by(Scenario.created_at.desc()).all()
+        scenarios_list = [
+            {"id": s.scenario_id, "name": s.name, "type": s.type} for s in scenarios
+        ]
+
+    return jsonify({"scenarios": scenarios_list})
+
 
 @app.route("/api/scenario/save", methods=["POST"])
 def save_scenario():
@@ -96,51 +133,42 @@ def save_scenario():
     scenario_name = data.get("scenario_name")
     changes = data.get("changes", [])
 
-    if not changes:
-        return jsonify({"error": "No changes to save"}), 400
+    if not changes and not scenario_name:
+        return jsonify({"error": "No changes or scenario name to save"}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        # If no scenario_id, create new scenario
+    with get_db() as db:
+        # Create new scenario if ID not provided
         if not scenario_id:
             if not scenario_name:
                 return jsonify({"error": "Scenario name required for new scenario"}), 400
-            cursor.execute(
-                "INSERT INTO scenario (name, description, created_at) VALUES (?, ?, datetime('now'))",
-                (scenario_name, "User-created scenario"),
+            new_scenario = Scenario(
+                name=scenario_name,
+                description="User-created scenario",
+                type="tpo",  # default type
+                created_at=datetime.utcnow()
             )
-            scenario_id = cursor.lastrowid
+            db.add(new_scenario)
+            db.flush()
+            scenario_id = new_scenario.scenario_id
         else:
-            # Overwrite scenario name if given
+            scenario = db.query(Scenario).filter_by(scenario_id=scenario_id).first()
+            if not scenario:
+                return jsonify({"error": f"Scenario {scenario_id} not found"}), 404
             if scenario_name:
-                cursor.execute("UPDATE scenario SET name = ? WHERE id = ?", (scenario_name, scenario_id))
-            # Delete old overrides for this scenario to overwrite
-            cursor.execute("DELETE FROM scenario_overrides WHERE scenario_id = ?", (scenario_id,))
+                scenario.name = scenario_name
+            # Delete old overrides to overwrite
+            db.query(ScenarioOverride).filter_by(scenario_id=scenario_id).delete()
 
         # Insert new overrides
         for c in changes:
-            cursor.execute(
-                """
-                INSERT INTO scenario_overrides
-                (scenario_id, table_name, row_id, column_name, override_value)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    scenario_id,
-                    c.get("table"),
-                    c.get("row_id"),
-                    c.get("column"),
-                    str(c.get("new_value")),
-                ),
+            override = ScenarioOverride(
+                scenario_id=scenario_id,
+                table_name=c.get("table"),
+                row_id=c.get("row_id"),
+                column_name=c.get("column"),
+                override_value=str(c.get("new_value"))
             )
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": f"Failed to save scenario: {e}"}), 500
-    finally:
-        conn.close()
+            db.add(override)
 
     return jsonify({"status": "saved", "scenario_id": scenario_id})
 
