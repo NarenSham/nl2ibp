@@ -23,59 +23,86 @@
       padding: 6px 12px;
       font-size: 14px;
     }
+    .modal {
+      display: none;
+      position: fixed;
+      top: 20%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #fff;
+      border: 1px solid #ccc;
+      padding: 20px;
+      z-index: 1000;
+      width: 300px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top:0; left:0; right:0; bottom:0;
+      background: #0008;
+      z-index: 999;
+    }
   </style>
 </head>
-<!-- Save Scenario Modal -->
-<div id="save-scenario-modal" style="display:none; position:fixed; top:20%; left:50%; transform: translateX(-50%);
-    background:#fff; border:1px solid #ccc; padding:20px; z-index:1000; width:300px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);">
-  <h3>Save Scenario</h3>
-  <form id="save-scenario-form">
-    <label>
-      <input type="radio" name="saveOption" value="new" checked /> Save as new
-    </label><br/>
-    <label>
-      <input type="radio" name="saveOption" value="overwrite" /> Overwrite existing
-    </label><br/><br/>
-
-    <div id="new-name-container">
-      <label>Scenario Name:<br/>
-        <input type="text" id="scenario-name-input" placeholder="Enter scenario name" />
-      </label>
-    </div>
-    <label>
-      Scenario Type:<br/>
-      <select id="scenario-type-select">
-        <option value="tpo" selected>Trade Promotion (TPO)</option>
-        <option value="finance">Finance</option>
-        <option value="supply">Supply</option>
-      </select>
-    </label>
-
-    <div id="existing-scenario-container" style="display:none;">
-      <label>Choose scenario to overwrite:<br/>
-        <select id="existing-scenario-select">
-          <!-- options added dynamically -->
-        </select>
-      </label>
-    </div>
-
-    <br/>
-    <button type="submit">Save</button>
-    <button type="button" id="cancel-save-btn">Cancel</button>
-  </form>
-</div>
-
-<!-- Modal background overlay -->
-<div id="modal-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:#0008; z-index:999;"></div>
 
 <body>
   <h2>OptiGuide Chatbot</h2>
 
-  <div id="scenario-indicator">⚠️ Scenario Mode Active</div>
   <div id="scenario-buttons">
-    <button id="start-scenario-btn">Start Scenario</button>
+    <button id="start-scenario-btn">Start New Scenario</button>
+    <button id="load-scenario-btn">Load Scenario</button>
+    <button id="edit-scenario-btn" disabled>Edit Scenario</button>
     <button id="save-scenario-btn" disabled>Save Scenario</button>
   </div>
+  <div id="scenario-indicator">⚠️ Scenario Mode Active</div>
+
+  <!-- Save Scenario Modal -->
+  <div id="save-scenario-modal" class="modal">
+    <h3>Save Scenario</h3>
+    <form id="save-scenario-form">
+      <label>
+        <input type="radio" name="saveOption" value="new" checked /> Save as new
+      </label><br/>
+      <label>
+        <input type="radio" name="saveOption" value="overwrite" /> Overwrite existing
+      </label><br/><br/>
+
+      <div id="new-name-container">
+        <label>Scenario Name:<br/>
+          <input type="text" id="newScenarioName" placeholder="Enter scenario name" />
+        </label>
+      </div>
+
+      <div id="save-scenario-radio-container" style="display:none;">
+        <label>Scenario Type:
+          <select id="scenario-type-select">
+            <option value="tpo">TPO</option>
+            <option value="other">Other</option>
+          </select>
+        </label>        
+      </div>
+
+      <br/>
+      <button type="submit">Save & Exit Edit Mode</button>
+      <button type="button" id="cancel-save-btn">Cancel</button>
+    </form>
+  </div>
+
+  <!-- Load Scenario Modal -->
+  <div id="load-scenario-modal" class="modal">
+    <h3>Load Scenario</h3>
+    <form id="load-scenario-form">
+      <div id="load-scenario-radio-container">
+        <!-- JS will populate radio buttons for available scenarios -->
+      </div>
+      <br/>
+      <button type="submit">Load</button>
+      <button type="button" id="cancel-load-btn">Cancel</button>
+    </form>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay"></div>
 
   <div id="container">
     <div id="left-panel">
@@ -97,6 +124,8 @@
     </div>
   </div>
 
+
+
   <script>
     const chatbox = document.getElementById('chatbox');
     const userInput = document.getElementById('user-input');
@@ -105,149 +134,350 @@
     const jsonRaw = document.getElementById('json-raw');
     
     const saveScenarioModal = document.getElementById("save-scenario-modal");
+    const loadScenarioModal = document.getElementById("load-scenario-modal");
     const modalOverlay = document.getElementById("modal-overlay");
     const saveScenarioForm = document.getElementById("save-scenario-form");
-    const scenarioNameInput = document.getElementById("scenario-name-input");
+    const scenarioNameInput = document.getElementById("newScenarioName");
     const scenarioTypeSelect = document.getElementById("scenario-type-select");
-    
-    const existingScenarioContainer = document.getElementById("existing-scenario-container");
-    const newNameContainer = document.getElementById("new-name-container");
-    const existingScenarioSelect = document.getElementById("existing-scenario-select");
-    const cancelSaveBtn = document.getElementById("cancel-save-btn");
     
     const startScenarioBtn = document.getElementById('start-scenario-btn');
     const saveScenarioBtn = document.getElementById('save-scenario-btn');
+    const loadScenarioBtn = document.getElementById("load-scenario-btn");
+    const editScenarioBtn = document.getElementById("edit-scenario-btn");
     const scenarioIndicator = document.getElementById('scenario-indicator');
     
+    // Radio buttons in Save Modal
+    const saveOptionRadios = saveScenarioForm.querySelectorAll('input[name="saveOption"]');
+    const saveScenarioRadioContainer = document.getElementById("save-scenario-radio-container");
+    
     let scenarioActive = false;
+    let loadedScenarioId = null;
     let activeScenarioId = null;
     let scenarioChanges = [];
+    let startedScenarioName = "";
     
+    // -------------------- Utility Functions --------------------
     function appendMessage(message, className) {
-      const msgDiv = document.createElement('div');
-      msgDiv.className = className;
-      msgDiv.textContent = message;
-      chatbox.appendChild(msgDiv);
-      chatbox.scrollTop = chatbox.scrollHeight;
+        const msgDiv = document.createElement('div');
+        msgDiv.className = className;
+        msgDiv.textContent = message;
+        chatbox.appendChild(msgDiv);
+        chatbox.scrollTop = chatbox.scrollHeight;
     }
     
     function clearJsonDisplay() {
-      jsonTable.innerHTML = '';
-      jsonRaw.textContent = '';
+        jsonTable.innerHTML = '';
+        jsonRaw.textContent = '';
     }
     
     function renderJsonTable(data) {
-      if (!data) return;
-      clearJsonDisplay();
-      if (Array.isArray(data) && data.length > 0) {
-        const headers = Object.keys(data[0]);
-        const thead = document.createElement('thead');
-        const headerRow = document.createElement('tr');
-        headers.forEach(h => { const th = document.createElement('th'); th.textContent = h; headerRow.appendChild(th); });
-        thead.appendChild(headerRow); jsonTable.appendChild(thead);
-        const tbody = document.createElement('tbody');
-        data.forEach(item => {
-          const row = document.createElement('tr');
-          headers.forEach(h => { const td = document.createElement('td'); td.textContent = item[h]; row.appendChild(td); });
-          tbody.appendChild(row);
-        });
-        jsonTable.appendChild(tbody);
-      } else if (typeof data === 'object') {
-        const tbody = document.createElement('tbody');
-        Object.entries(data).forEach(([key, value]) => {
-          const row = document.createElement('tr');
-          const keyTd = document.createElement('td'); keyTd.textContent = key;
-          const valTd = document.createElement('td'); valTd.textContent = JSON.stringify(value);
-          row.appendChild(keyTd); row.appendChild(valTd);
-          tbody.appendChild(row);
-        });
-        jsonTable.appendChild(tbody);
-      } else {
-        jsonRaw.textContent = JSON.stringify(data, null, 2);
-      }
+        if (!data) return clearJsonDisplay();
+        clearJsonDisplay();
+    
+        if (Array.isArray(data) && data.length > 0) {
+            const headers = Object.keys(data[0]);
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            headers.forEach(h => { 
+                const th = document.createElement('th'); 
+                th.textContent = h; 
+                headerRow.appendChild(th); 
+            });
+            thead.appendChild(headerRow); 
+            jsonTable.appendChild(thead);
+    
+            const tbody = document.createElement('tbody');
+            data.forEach(item => {
+                const row = document.createElement('tr');
+                headers.forEach(h => { 
+                    const td = document.createElement('td'); 
+                    td.textContent = item[h]; 
+                    row.appendChild(td); 
+                });
+                tbody.appendChild(row);
+            });
+            jsonTable.appendChild(tbody);
+        } else if (typeof data === 'object') {
+            const tbody = document.createElement('tbody');
+            Object.entries(data).forEach(([key, value]) => {
+                const row = document.createElement('tr');
+                const keyTd = document.createElement('td'); keyTd.textContent = key;
+                const valTd = document.createElement('td'); valTd.textContent = JSON.stringify(value);
+                row.appendChild(keyTd); row.appendChild(valTd);
+                tbody.appendChild(row);
+            });
+            jsonTable.appendChild(tbody);
+        } else {
+            jsonRaw.textContent = JSON.stringify(data, null, 2);
+        }
     }
     
+    // -------------------- Send Query --------------------
     async function sendQuery() {
-      const query = userInput.value.trim(); if (!query) return;
-      appendMessage(`You: ${query}`, 'user-msg'); userInput.value = ''; clearJsonDisplay();
-      try {
-        const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
-        const data = await res.json();
-        if (data.error) appendMessage(`Bot: ${data.error}`, 'bot-msg');
-        else { appendMessage(`Bot: ${data.nlg}`, 'bot-msg'); renderJsonTable(data.response); }
-      } catch (err) { appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg'); }
+        const query = userInput.value.trim(); 
+        if (!query) return;
+        appendMessage(`You: ${query}`, 'user-msg'); 
+        userInput.value = ''; 
+        clearJsonDisplay();
+        try {
+            const res = await fetch('/api/chat', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ query }) 
+            });
+            const data = await res.json();
+            if (data.error) appendMessage(`Bot: ${data.error}`, 'bot-msg');
+            else { 
+                appendMessage(`Bot: ${data.nlg}`, 'bot-msg'); 
+                renderJsonTable(data.response); 
+            }
+        } catch (err) { 
+            appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg'); 
+        }
     }
     
     sendBtn.addEventListener('click', sendQuery);
     userInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendQuery(); });
     
-    // ------------------ Scenario Start ------------------
+    // -------------------- Start Scenario --------------------
     startScenarioBtn.addEventListener('click', async () => {
-      try {
-        const type = scenarioTypeSelect.value;
-        const res = await fetch('/api/scenario/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) });
-        const data = await res.json();
-        if (data.status === 'started') {
-          scenarioActive = true; activeScenarioId = data.scenario_id; scenarioChanges = [];
-          scenarioIndicator.style.display = 'block'; saveScenarioBtn.disabled = false;
-          appendMessage("System: Scenario mode started.", 'system-msg');
+        const scenarioType = scenarioTypeSelect.value;
+        const scenarioName = prompt("Enter a name for your new scenario:");
+        if (!scenarioName) return;
+    
+        startedScenarioName = scenarioName;
+    
+        try {
+            const res = await fetch('/api/scenario/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: scenarioType, name: scenarioName })
+            });
+            const data = await res.json();
+            if (data.status === 'started') {
+                scenarioActive = true;
+                activeScenarioId = data.scenario_id;
+                loadedScenarioId = null;
+                scenarioChanges = [];
+    
+                scenarioIndicator.style.display = 'block';
+                saveScenarioBtn.disabled = false;
+                editScenarioBtn.disabled = true;
+    
+                appendMessage(`System: Scenario '${scenarioName}' started in edit mode.`, 'system-msg');
+            } else {
+                appendMessage(`System: Failed to start scenario: ${data.error}`, 'system-msg');
+            }
+        } catch (err) {
+            appendMessage(`System: Error starting scenario: ${err}`, 'system-msg');
         }
-      } catch (err) { appendMessage(`System: Failed to start scenario mode: ${err}`, 'system-msg'); }
     });
     
-    // ------------------ Scenario Save ------------------
-    saveScenarioBtn.addEventListener("click", async () => {
-      try {
-        const res = await fetch("/api/scenario/list");
-        const data = await res.json();
-        if (res.ok) {
-          existingScenarioSelect.innerHTML = "";
-          data.scenarios.forEach(scenario => {
-            const option = document.createElement("option");
-            option.value = scenario.id;
-            option.textContent = `${scenario.name} (${scenario.type})`;
-            existingScenarioSelect.appendChild(option);
-          });
-          showModal();
-        } else appendMessage(`System: Failed to fetch scenarios: ${data.error}`, "system-msg");
-      } catch (err) { appendMessage(`System: Failed to fetch scenarios: ${err}`, "system-msg"); }
+    // -------------------- Save Scenario Modal --------------------
+    saveScenarioBtn.addEventListener("click", () => {
+        saveScenarioModal.style.display = "block";
+        modalOverlay.style.display = "block";
+    
+        // Prefill scenario name if user just started scenario
+        if (scenarioNameInput.value.trim() === "") {
+            scenarioNameInput.value = startedScenarioName || "";
+        }
+    
+        // Default to Save as New
+        saveScenarioForm.querySelector('input[name="saveOption"][value="new"]').checked = true;
+        saveScenarioRadioContainer.style.display = "none";
     });
     
-    function showModal() { saveScenarioModal.style.display = "block"; modalOverlay.style.display = "block"; scenarioNameInput.value = ""; existingScenarioContainer.style.display = "none"; newNameContainer.style.display = "block"; saveScenarioForm.saveOption.value = "new"; }
-    function hideModal() { saveScenarioModal.style.display = "none"; modalOverlay.style.display = "none"; }
+    // Toggle overwrite list visibility
+    saveOptionRadios.forEach(radio => {
+        radio.addEventListener("change", () => {
+            if (radio.value === "overwrite") {
+                saveScenarioRadioContainer.style.display = "block";
+                populateSaveOverwriteList();
+            } else {
+                saveScenarioRadioContainer.style.display = "none";
+            }
+        });
+    });
     
-    saveScenarioForm.saveOption.forEach(radio => { radio.addEventListener("change", () => {
-      if (saveScenarioForm.saveOption.value === "overwrite") { existingScenarioContainer.style.display = "block"; newNameContainer.style.display = "none"; }
-      else { existingScenarioContainer.style.display = "none"; newNameContainer.style.display = "block"; }
-    }); });
+    // Populate overwrite options
+    async function populateSaveOverwriteList() {
+        try {
+            const res = await fetch("/api/scenario/list");
+            const data = await res.json();
+            saveScenarioRadioContainer.innerHTML = "";
     
-    cancelSaveBtn.addEventListener("click", hideModal);
+            if (!data.scenarios || data.scenarios.length === 0) {
+                saveScenarioRadioContainer.textContent = "No scenarios to overwrite.";
+                return;
+            }
     
+            data.scenarios.forEach(s => {
+                const label = document.createElement("label");
+                label.style.display = "block";
+                const radio = document.createElement("input");
+                radio.type = "radio";
+                radio.name = "overwriteScenarioRadio";
+                radio.value = s.id;
+                label.appendChild(radio);
+                label.appendChild(document.createTextNode(` ${s.name} (${s.type})`));
+                saveScenarioRadioContainer.appendChild(label);
+            });
+        } catch (err) {
+            appendMessage(`System: Failed to fetch scenarios: ${err}`, "system-msg");
+        }
+    }
+    
+    // Submit Save Scenario
     saveScenarioForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      let scenario_id_to_save = null; let scenario_name_to_save = null;
-      const saveOption = saveScenarioForm.saveOption.value;
-      const scenarioType = scenarioTypeSelect.value;
+        e.preventDefault();
+        const selectedOption = saveScenarioForm.querySelector('input[name="saveOption"]:checked').value;
+        let scenarioIdToSave = null;
     
-      if (saveOption === "new") {
-        scenario_name_to_save = scenarioNameInput.value.trim();
-        if (!scenario_name_to_save) { alert("Please enter a scenario name"); return; }
-      } else scenario_id_to_save = existingScenarioSelect.value;
+        if (selectedOption === "overwrite") {
+            const selectedScenario = saveScenarioForm.querySelector('input[name="overwriteScenarioRadio"]:checked');
+            if (!selectedScenario) return alert("Select a scenario to overwrite.");
+            scenarioIdToSave = selectedScenario.value;
+        }
     
-      if (!scenarioActive) { alert("No active scenario to save"); return; }
+        const scenarioName = scenarioNameInput.value.trim();
+        if (!scenarioName) return alert("Enter a scenario name.");
     
-      try {
-        const res = await fetch("/api/scenario/save", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scenario_id: scenario_id_to_save || activeScenarioId, scenario_name: scenario_name_to_save, type: scenarioType, changes: scenarioChanges }) });
-        const data = await res.json();
-        if (res.ok && data.status === "saved") {
-          appendMessage("System: Scenario saved successfully.", "system-msg");
-          if (saveOption === "new") activeScenarioId = data.scenario_id;
-          hideModal();
-        } else appendMessage(`System: Failed to save scenario: ${data.error || "Unknown error"}`, "system-msg");
-      } catch (err) { appendMessage(`System: Failed to save scenario: ${err}`, "system-msg"); }
+        try {
+            const res = await fetch("/api/scenario/save", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    saveOption: selectedOption,
+                    scenario_id: scenarioIdToSave,
+                    scenario_name: scenarioName,
+                    changes: scenarioChanges
+                })
+            });
+            const data = await res.json();
+            if (data.status === "saved") {
+                appendMessage(`System: Scenario '${scenarioName}' saved successfully.`, "system-msg");
+                scenarioChanges = [];
+                hideModal("save-scenario-modal");
+            } else {
+                appendMessage(`System: Failed to save scenario: ${data.error}`, "system-msg");
+            }
+        } catch (err) {
+            appendMessage(`System: Error saving scenario: ${err}`, "system-msg");
+        }
     });
+    
+    // -------------------- Load Scenario --------------------
+    loadScenarioBtn.addEventListener("click", () => {
+        showScenarioRadioModal("load-scenario-modal", "load-scenario-radio-container", async (scenarioId) => {
+            try {
+                const res = await fetch("/api/scenario/load", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ scenario_id: scenarioId })
+                });
+                const data = await res.json();
+                if (data.status === "loaded") {
+                    loadedScenarioId = data.scenario_id;
+                    activeScenarioId = null;
+                    scenarioActive = false;
+                    scenarioChanges = [];
+    
+                    scenarioIndicator.style.display = "none";
+                    saveScenarioBtn.disabled = true;
+                    editScenarioBtn.disabled = false;
+    
+                    appendMessage(`System: Loaded scenario '${data.scenario_name}' in view-only mode.`, "system-msg");
+                    renderJsonTable(data.overrides);
+                } else {
+                    appendMessage(`System: Failed to load scenario: ${data.error}`, "system-msg");
+                }
+            } catch (err) {
+                appendMessage(`System: Error loading scenario: ${err}`, "system-msg");
+            }
+        });
+    });
+    
+    // -------------------- Edit Scenario --------------------
+    editScenarioBtn.addEventListener("click", () => {
+        if (!loadedScenarioId) return alert("No scenario loaded to edit.");
+        scenarioActive = true;
+        activeScenarioId = loadedScenarioId;
+        loadedScenarioId = null;
+        scenarioChanges = [];
+    
+        scenarioIndicator.style.display = "block";
+        saveScenarioBtn.disabled = false;
+        editScenarioBtn.disabled = true;
+    
+        appendMessage("System: Scenario is now in edit mode.", "system-msg");
+    });
+    
+    // -------------------- Modal Helpers --------------------
+    async function showScenarioRadioModal(modalId, radioContainerId, onSubmit) {
+        try {
+            const res = await fetch("/api/scenario/list");
+            if (!res.ok) throw new Error("Failed to fetch scenarios");
+            const data = await res.json();
+    
+            const container = document.getElementById(radioContainerId);
+            container.innerHTML = "";
+    
+            if (!data.scenarios || data.scenarios.length === 0) {
+                container.textContent = "No scenarios available.";
+                return;
+            }
+    
+            data.scenarios.forEach(s => {
+                const label = document.createElement("label");
+                label.style.display = "block";
+                const radio = document.createElement("input");
+                radio.type = "radio";
+                radio.name = "scenarioRadio";
+                radio.value = s.id;
+                label.appendChild(radio);
+                label.appendChild(document.createTextNode(` ${s.name} (${s.type})`));
+                container.appendChild(label);
+            });
+    
+            const modal = document.getElementById(modalId);
+            modal.style.display = "block";
+            modalOverlay.style.display = "block";
+    
+            const form = modal.querySelector("form");
+            const submitHandler = async (e) => {
+                e.preventDefault();
+                const selected = form.querySelector('input[name="scenarioRadio"]:checked');
+                if (!selected) {
+                    alert("Please select a scenario.");
+                    return;
+                }
+                await onSubmit(selected.value);
+                hideModal(modalId);
+                form.removeEventListener("submit", submitHandler);
+            };
+            form.addEventListener("submit", submitHandler);
+    
+            const cancelBtn = form.querySelector('button[type="button"]');
+            const cancelHandler = () => {
+                hideModal(modalId);
+                form.removeEventListener("submit", submitHandler);
+                cancelBtn.removeEventListener("click", cancelHandler);
+            };
+            cancelBtn.addEventListener("click", cancelHandler);
+    
+        } catch (err) {
+            appendMessage(`System: Failed to fetch scenarios: ${err}`, "system-msg");
+        }
+    }
+    
+    function hideModal(modalId) {
+        document.getElementById(modalId).style.display = "none";
+        modalOverlay.style.display = "none";
+    }
     </script>
+        
+    
     
 </body>
 </html>

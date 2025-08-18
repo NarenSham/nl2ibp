@@ -50,10 +50,11 @@ def chat():
         nlg_text = str(nlg_text)
 
     # Track scenario modifications in session
-    if "modifications" in parsed and session.get("active_scenario_id"):
+    if "modifications" in parsed and session.get("active_scenario_id") and session.get("scenario_mode") == "edit":
         if "scenario_changes" not in session:
             session["scenario_changes"] = []
         session["scenario_changes"].extend(parsed["modifications"])
+
 
     return jsonify({
         "response": parsed.get("result"),
@@ -93,26 +94,18 @@ def load_scenario():
         return jsonify({"error": "scenario_id required"}), 400
 
     with get_db() as db:
-        overrides = db.query(ScenarioOverride).filter_by(scenario_id=scenario_id).all()
-        overrides_json = [
-            {
-                "id": o.id,
-                "table_name": o.table_name,
-                "row_id": o.row_id,
-                "column_name": o.column_name,
-                "override_value": o.override_value
-            }
-            for o in overrides
-        ]
-
-    session["active_scenario_id"] = scenario_id
-    session["scenario_changes"] = overrides_json
+        # Load scenario for **view-only analysis**, not edit
+        overrides_json = hydrate_scenario_in_session(db, scenario_id, edit_mode=False)
+        scenario = db.query(Scenario).filter_by(scenario_id=scenario_id).first()
+        scenario_name = scenario.name if scenario else "Unknown"
 
     return jsonify({
         "status": "loaded",
         "scenario_id": scenario_id,
+        "scenario_name": scenario_name,
         "overrides": overrides_json
     })
+
 
 
 @app.route("/api/scenario/list")
@@ -137,7 +130,7 @@ def save_scenario():
         return jsonify({"error": "No changes or scenario name to save"}), 400
 
     with get_db() as db:
-        # Create new scenario if ID not provided
+        # ---------- CREATE NEW SCENARIO ----------
         if not scenario_id:
             if not scenario_name:
                 return jsonify({"error": "Scenario name required for new scenario"}), 400
@@ -150,16 +143,18 @@ def save_scenario():
             db.add(new_scenario)
             db.flush()
             scenario_id = new_scenario.scenario_id
+
+        # ---------- UPDATE EXISTING SCENARIO ----------
         else:
             scenario = db.query(Scenario).filter_by(scenario_id=scenario_id).first()
             if not scenario:
                 return jsonify({"error": f"Scenario {scenario_id} not found"}), 404
             if scenario_name:
                 scenario.name = scenario_name
-            # Delete old overrides to overwrite
+            # Delete old overrides before inserting new ones
             db.query(ScenarioOverride).filter_by(scenario_id=scenario_id).delete()
 
-        # Insert new overrides
+        # ---------- INSERT NEW OVERRIDES ----------
         for c in changes:
             override = ScenarioOverride(
                 scenario_id=scenario_id,
@@ -170,7 +165,48 @@ def save_scenario():
             )
             db.add(override)
 
-    return jsonify({"status": "saved", "scenario_id": scenario_id})
+        db.commit()
+
+        # ---------- HYDRATE SESSION ----------
+        overrides_json = hydrate_scenario_in_session(db, scenario_id)
+
+        # Optional: reset scenario mode after save
+        session.pop("active_scenario_id", None)
+        session.pop("scenario_changes", None)
+
+    return jsonify({
+        "status": "saved",
+        "scenario_id": scenario_id,
+        "overrides": overrides_json
+    })
+
+#   Refactor your load logic into a helper function, then call it both from save_scenario and load_scenario.
+
+def hydrate_scenario_in_session(db, scenario_id, edit_mode=False):
+    overrides = db.query(ScenarioOverride).filter_by(scenario_id=scenario_id).all()
+    overrides_json = [
+        {
+            "id": o.id,
+            "table_name": o.table_name,
+            "row_id": o.row_id,
+            "column_name": o.column_name,
+            "override_value": o.override_value
+        }
+        for o in overrides
+    ]
+
+    if edit_mode:
+        # Scenario user can edit
+        session["active_scenario_id"] = scenario_id
+        session["scenario_changes"] = overrides_json
+    else:
+        # Scenario loaded for view-only analysis
+        session["loaded_scenario_id"] = scenario_id
+
+    return overrides_json
+
+
+
 
 
 if __name__ == "__main__":
