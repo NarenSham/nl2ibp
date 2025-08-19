@@ -111,12 +111,16 @@ def load_scenario():
 @app.route("/api/scenario/list")
 def list_scenarios():
     with get_db() as db:
-        scenarios = db.query(Scenario).order_by(Scenario.created_at.desc()).all()
-        scenarios_list = [
-            {"id": s.scenario_id, "name": s.name, "type": s.type} for s in scenarios
-        ]
-
-    return jsonify({"scenarios": scenarios_list})
+        scenarios = db.query(Scenario).distinct(Scenario.scenario_id).all()
+        # OR: remove duplicates manually
+        seen = set()
+        result = []
+        for s in scenarios:
+            if s.scenario_id in seen:
+                continue
+            seen.add(s.scenario_id)
+            result.append({"id": s.scenario_id, "name": s.name, "type": s.type})
+    return jsonify({"scenarios": result})
 
 
 @app.route("/api/scenario/save", methods=["POST"])
@@ -124,6 +128,7 @@ def save_scenario():
     data = request.get_json()
     scenario_id = data.get("scenario_id")
     scenario_name = data.get("scenario_name")
+    scenario_type = data.get("scenario_type", "tpo")
     changes = data.get("changes", [])
 
     if not changes and not scenario_name:
@@ -134,15 +139,25 @@ def save_scenario():
         if not scenario_id:
             if not scenario_name:
                 return jsonify({"error": "Scenario name required for new scenario"}), 400
-            new_scenario = Scenario(
-                name=scenario_name,
-                description="User-created scenario",
-                type="tpo",  # default type
-                created_at=datetime.utcnow()
-            )
-            db.add(new_scenario)
-            db.flush()
-            scenario_id = new_scenario.scenario_id
+
+            # 🔑 NEW: check if a scenario with the same name+type already exists
+            existing = db.query(Scenario).filter_by(name=scenario_name, type=scenario_type).first()
+            if existing:
+                # treat it as update instead of creating duplicate
+                scenario_id = existing.scenario_id
+                db.query(ScenarioOverride).filter_by(scenario_id=scenario_id).delete()
+                scenario = existing
+            else:
+                new_scenario = Scenario(
+                    name=scenario_name,
+                    description="User-created scenario",
+                    type=scenario_type,
+                    created_at=datetime.utcnow()
+                )
+                db.add(new_scenario)
+                db.flush()
+                scenario_id = new_scenario.scenario_id
+                scenario = new_scenario
 
         # ---------- UPDATE EXISTING SCENARIO ----------
         else:
@@ -151,7 +166,6 @@ def save_scenario():
                 return jsonify({"error": f"Scenario {scenario_id} not found"}), 404
             if scenario_name:
                 scenario.name = scenario_name
-            # Delete old overrides before inserting new ones
             db.query(ScenarioOverride).filter_by(scenario_id=scenario_id).delete()
 
         # ---------- INSERT NEW OVERRIDES ----------
@@ -165,20 +179,26 @@ def save_scenario():
             )
             db.add(override)
 
+        saved_name = scenario.name
+        saved_id = scenario_id
+
         db.commit()
 
         # ---------- HYDRATE SESSION ----------
         overrides_json = hydrate_scenario_in_session(db, scenario_id)
 
-        # Optional: reset scenario mode after save
+        # reset scenario mode after save
         session.pop("active_scenario_id", None)
         session.pop("scenario_changes", None)
+        session.pop("scenario_mode", None)
 
     return jsonify({
         "status": "saved",
-        "scenario_id": scenario_id,
+        "scenario_id": saved_id,
+        "scenario_name": saved_name,
         "overrides": overrides_json
     })
+
 
 #   Refactor your load logic into a helper function, then call it both from save_scenario and load_scenario.
 

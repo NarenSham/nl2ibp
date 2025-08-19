@@ -311,8 +311,12 @@
                 saveScenarioRadioContainer.textContent = "No scenarios to overwrite.";
                 return;
             }
-    
+            
+            const seen = new Set();
             data.scenarios.forEach(s => {
+                if (seen.has(s.id)) return;  // skip duplicates
+                seen.add(s.id);
+
                 const label = document.createElement("label");
                 label.style.display = "block";
                 const radio = document.createElement("input");
@@ -359,6 +363,17 @@
                 appendMessage(`System: Scenario '${scenarioName}' saved successfully.`, "system-msg");
                 scenarioChanges = [];
                 hideModal("save-scenario-modal");
+                scenarioChanges = [];
+                currentScenario = {
+                    id: data.scenario_id,
+                    name: data.scenario_name
+                };
+
+                // Switch back to view mode
+                document.getElementById("scenario-indicator").style.display = "none";
+                document.getElementById("edit-scenario-btn").disabled = false;
+                document.getElementById("save-scenario-btn").disabled = true;
+
             } else {
                 appendMessage(`System: Failed to save scenario: ${data.error}`, "system-msg");
             }
@@ -427,8 +442,12 @@
                 container.textContent = "No scenarios available.";
                 return;
             }
-    
+            
+            const seen = new Set();
             data.scenarios.forEach(s => {
+                if (seen.has(s.id)) return;  // skip duplicates
+                seen.add(s.id);
+
                 const label = document.createElement("label");
                 label.style.display = "block";
                 const radio = document.createElement("input");
