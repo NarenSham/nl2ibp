@@ -1,135 +1,184 @@
-import torch
-from transformers import pipeline
-import sqlite3
 import re
-import math
-from .nlg import generate_nlg  # import your NLG function
+from sqlalchemy.orm import Session
+from transformers import pipeline
+from models import Promotion, Scenario, FinanceAssumption, SupplyAssumption
 
-DB_PATH = "db/optiguide.db"
-
-# Zero-shot classifier
+# -----------------------------
+# Zero-shot intent classifier
+# -----------------------------
 classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
-# ===== Database connection =====
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-# ===== Constraint Parser =====
-def constraint_parser(user_input):
+# =============================
+# Constraint Parser (internal)
+# =============================
+def constraint_parser(user_input: str) -> list:
+    """
+    Parse natural language constraints from the user query.
+    Returns a list of constraint dicts for backend processing only.
+    """
     constraints = []
 
-    # Unavailable warehouses
-    unavailable = re.findall(r"warehouse\s*([A-Za-z0-9]+)\s*unavailable", user_input.lower())
-    for w in unavailable:
-        constraints.append({"type": "exclude_warehouse", "warehouse": w})
+    # Budget cap (e.g. "under 2M", "below 500k")
+    budget = re.search(r"(?:under|below)\s*\$?(\d+[kKmM]?)\s*(?:budget|spend|cost)?", user_input)
+    if budget:
+        val = budget.group(1).lower()
+        multiplier = 1
+        if "k" in val:
+            multiplier = 1_000
+        elif "m" in val:
+            multiplier = 1_000_000
+        constraints.append({"type": "max_budget", "value": float(re.sub(r'[kKmM]', '', val)) * multiplier})
 
-    # Max cost
-    match = re.search(r"under cost (\d+)", user_input)
-    if match:
-        constraints.append({"type": "max_cost", "value": float(match.group(1))})
+    # Promotion duration (e.g. "for 2 weeks")
+    duration = re.search(r"(?:for|lasting)\s*(\d+)\s*(weeks?|days?|months?)", user_input)
+    if duration:
+        constraints.append({"type": "promo_duration", "value": f"{duration.group(1)} {duration.group(2)}"})
 
-    # Min inventory
-    inv_match = re.findall(r"inventory in warehouse\s*([A-Za-z0-9]+)\s*below\s*(\d+)", user_input.lower())
-    for w, val in inv_match:
-        constraints.append({"type": "min_inventory", "warehouse": w, "value": float(val)})
+    # Discount limits
+    discount = re.search(r"(?:max|min)?\s*discount\s*(\d+)%", user_input)
+    if discount:
+        constraints.append({"type": "discount_limit", "value": float(discount.group(1))})
+
+    # Channel restrictions
+    channels = {"walmart": "Walmart", "target": "Target"}
+    for keyword, channel in channels.items():
+        if keyword in user_input.lower():
+            constraints.append({"type": "channel_include", "channel": channel})
+    if "exclude e-commerce" in user_input.lower() or "no online" in user_input.lower():
+        constraints.append({"type": "channel_exclude", "channel": "E-commerce"})
+
+    # SKU / brand restrictions
+    sku_focus = re.search(r"(?:only|focus on)\s+([a-zA-Z0-9\s]+)", user_input)
+    if sku_focus:
+        constraints.append({"type": "sku_focus", "sku": sku_focus.group(1).strip()})
+    sku_exclude = re.search(r"exclude\s+([a-zA-Z0-9\s]+)", user_input)
+    if sku_exclude:
+        constraints.append({"type": "sku_exclude", "sku": sku_exclude.group(1).strip()})
+
+    # ROI / lift targets
+    roi = re.search(r"roi\s*>\s*(\d+(\.\d+)?)x", user_input)
+    if roi:
+        constraints.append({"type": "min_roi", "value": float(roi.group(1))})
+    lift = re.search(r"(?:lift|increase)\s*>\s*(\d+)%", user_input)
+    if lift:
+        constraints.append({"type": "min_lift", "value": float(lift.group(1))})
 
     return constraints
 
-# ===== Main Query Parser =====
-def parse_query(user_input):
+# =============================
+# Main Query Parser
+# =============================
+def parse_query(user_input: str, db: Session) -> dict:
+    """
+    Convert user natural language query into structured response + visualization.
+    Constraints are extracted internally for backend processing only.
+    """
+    # --- Extract constraints (internal use) ---
+    constraints = constraint_parser(user_input)
+
+    # --- Intent classification ---
     candidate_labels = [
-        "list retailers",
-        "list warehouses",
-        "find routes",
-        "calculate demand",
+        "list promotions",
+        "summarize promotion impact",
+        "compare scenarios",
+        "show assumptions",
         "what if"
     ]
     classification = classifier(user_input, candidate_labels)
-    top_label = classification['labels'][0]
+    intent = classification['labels'][0]
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    result = {}
+    vis = None
+    nlg = ""
 
-    if top_label == "list retailers":
-        rows = cursor.execute("SELECT * FROM retailers").fetchall()
-        conn.close()
-        result = [dict(row) for row in rows]
-        nlg = generate_nlg(result, intent="list_retailers")
-        return {"result": result, "nlg": nlg}
+    # ------------------------
+    # 1. List promotions
+    # ------------------------
+    if intent == "list promotions":
+        promos = db.query(Promotion).all()
+        result = [
+            {
+                "promotion_id": p.id,
+                "product": p.product.name if p.product else None,
+                "retailer": p.retailer.name if p.retailer else None,
+                "week": p.week,
+                "discount_depth": p.discount_depth,
+                "tactic": p.tactic,
+                "incremental_units": p.est_incremental_units,
+                "incremental_revenue": p.est_incremental_revenue,
+                "incremental_profit": p.est_incremental_profit
+            }
+            for p in promos
+        ]
+        vis = {"chartType": "table", "data": result}
+        nlg = f"I found {len(result)} promotions in the system."
 
-    elif top_label == "list warehouses":
-        rows = cursor.execute("SELECT * FROM warehouses").fetchall()
-        conn.close()
-        result = [dict(row) for row in rows]
-        nlg = generate_nlg(result, intent="list_warehouses")
-        return {"result": result, "nlg": nlg}
-
-    elif top_label == "find routes":
-        match = re.search(r"under cost (\d+)", user_input)
-        cost_limit = float(match.group(1)) if match else math.inf
-        rows = cursor.execute("SELECT * FROM routes WHERE cost < ?", (cost_limit,)).fetchall()
-        conn.close()
-        result = [dict(row) for row in rows]
-        nlg = generate_nlg(result, intent="find_routes")
-        return {"result": result, "nlg": nlg}
-
-    elif top_label == "calculate demand":
-        warehouse_name = _find_warehouse_in_text(user_input, conn)
-        if not warehouse_name:
-            conn.close()
-            nlg = "Please specify a warehouse name."
-            return {"result": {}, "nlg": nlg}
-
-        w = cursor.execute(
-            "SELECT latitude, longitude FROM warehouses WHERE name = ?", (warehouse_name,)
-        ).fetchone()
-        if not w:
-            conn.close()
-            nlg = f"No warehouse found with name {warehouse_name}"
-            return {"result": {}, "nlg": nlg}
-
-        w_lat, w_lon = w["latitude"], w["longitude"]
-        retailers = cursor.execute("SELECT * FROM retailers").fetchall()
-        nearby = [r for r in retailers if _haversine(w_lat, w_lon, r["latitude"], r["longitude"]) <= 10]
-        total_demand = sum(r["demand"] for r in nearby)
-        conn.close()
-        result = {
-            "warehouse": warehouse_name,
-            "nearby_retailers": len(nearby),
-            "total_demand": total_demand
+    # ------------------------
+    # 2. Summarize promotion impact
+    # ------------------------
+    elif intent == "summarize promotion impact":
+        promos = db.query(Promotion).all()
+        result = [
+            {
+                "promotion": f"{p.product.name} @ {p.retailer.name}",
+                "units": p.est_incremental_units or 0,
+                "revenue": p.est_incremental_revenue or 0,
+                "profit": p.est_incremental_profit or 0
+            }
+            for p in promos
+        ]
+        vis = {
+            "chartType": "bar",
+            "data": [{"promotion": r["promotion"], "revenue": r["revenue"]} for r in result],
+            "config": {"x": "promotion", "y": "revenue", "title": "Incremental Revenue by Promotion"}
         }
-        nlg = generate_nlg(result, intent="calculate_demand")
-        return {"result": result, "nlg": nlg}
+        nlg = "Here’s the estimated incremental revenue impact by promotion."
 
-    elif top_label == "what if":
-        constraints = constraint_parser(user_input)
-        from optimizer.solver import solve_routing
-        result = solve_routing(constraints=constraints)
-        conn.close()
-        nlg = generate_nlg(result, intent="what_if")
-        return {"result": result, "nlg": nlg}
+    # ------------------------
+    # 3. Compare scenarios
+    # ------------------------
+    elif intent == "compare scenarios":
+        scenarios = db.query(Scenario).all()
+        result = []
+        for s in scenarios:
+            revenue = sum(p.promotion.est_incremental_revenue or 0 for p in s.tpo_promotions if p.selected)
+            profit = sum(p.promotion.est_incremental_profit or 0 for p in s.tpo_promotions if p.selected)
+            result.append({"scenario": s.name, "revenue": revenue, "profit": profit})
+        vis = {
+            "chartType": "bar",
+            "data": result,
+            "config": {"x": "scenario", "y": "revenue", "title": "Scenario Comparison (Revenue)"}
+        }
+        nlg = f"Compared {len(result)} scenarios by revenue and profit."
+
+    # ------------------------
+    # 4. Show assumptions
+    # ------------------------
+    elif intent == "show assumptions":
+        assumptions = db.query(FinanceAssumption).all() + db.query(SupplyAssumption).all()
+        result = [{"scenario_id": a.scenario_id, "key": a.key, "value": a.value} for a in assumptions]
+        vis = {"chartType": "table", "data": result}
+        nlg = f"Found {len(result)} finance/supply assumptions across scenarios."
+
+    # ------------------------
+    # 5. What-if override
+    # ------------------------
+    elif intent == "what if":
+        match = re.search(r"promotion (\d+).*discount.*(\d+)%", user_input)
+        if match:
+            promo_id, new_discount = int(match.group(1)), float(match.group(2))
+            override = {"promotion_id": promo_id, "new_discount": new_discount}
+            result = override
+            vis = {"chartType": "table", "data": [override]}
+            nlg = f"Applied override: Promotion {promo_id} discount → {new_discount}%"
+        else:
+            nlg = "Please specify which promotion and new discount you want to test."
 
     else:
-        conn.close()
-        nlg = "Sorry, I couldn't understand your request."
-        return {"result": {}, "nlg": nlg}
-# ===== Helpers =====
-def _find_warehouse_in_text(user_input, conn):
-    warehouses = conn.execute("SELECT name FROM warehouses").fetchall()
-    user_input_lower = user_input.lower()
-    for w in warehouses:
-        name = w["name"].lower()
-        if name in user_input_lower:
-            return w["name"]
-    return None
+        nlg = "Sorry, I couldn’t interpret your request."
 
-def _haversine(lat1, lon1, lat2, lon2):
-    from math import radians, cos, sin, asin, sqrt
-    R = 6371
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-    c = 2 * asin(sqrt(a))
-    return R * c
+    # ------------------------
+    # Return only NLG + visualization + result
+    # Constraints stay internal for backend
+    # ------------------------
+    return {"result": result, "nlg": nlg, "visualization": vis, "constraints": constraints}

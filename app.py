@@ -3,6 +3,8 @@ from models import SessionLocal, Scenario, ScenarioOverride
 from bot.parser import parse_query
 from contextlib import contextmanager
 from datetime import datetime
+from sqlalchemy.orm import Session
+
 
 app = Flask(__name__)
 app.secret_key = "your_super_secret_key"
@@ -44,7 +46,9 @@ def chat():
     if not user_query:
         return jsonify({"error": "No query provided"}), 400
 
-    parsed = parse_query(user_query)
+    with get_db() as db:
+        parsed = parse_query(user_query, db)
+
     nlg_text = parsed.get("nlg", "")
     if not isinstance(nlg_text, str):
         nlg_text = str(nlg_text)
@@ -55,10 +59,10 @@ def chat():
             session["scenario_changes"] = []
         session["scenario_changes"].extend(parsed["modifications"])
 
-
     return jsonify({
         "response": parsed.get("result"),
-        "nlg": nlg_text
+        "nlg": nlg_text, 
+        "visualization": parsed.get("visualization")
     })
 
 

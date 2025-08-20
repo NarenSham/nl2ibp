@@ -46,6 +46,9 @@
   </style>
 </head>
 
+
+
+
 <body>
   <h2>OptiGuide Chatbot</h2>
 
@@ -124,7 +127,7 @@
     </div>
   </div>
 
-
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <script>
     const chatbox = document.getElementById('chatbox');
@@ -230,6 +233,7 @@
             else { 
                 appendMessage(`Bot: ${data.nlg}`, 'bot-msg'); 
                 renderJsonTable(data.response); 
+                renderVisualization(data.visualization); 
             }
         } catch (err) { 
             appendMessage(`Bot: Error occurred: ${err}`, 'bot-msg'); 
@@ -238,6 +242,66 @@
     
     sendBtn.addEventListener('click', sendQuery);
     userInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendQuery(); });
+
+    // -------------------- Visualization --------------------
+
+    function renderVisualization(vis) {
+        if (!vis) return;
+        console.log("Rendering visualization:", vis);
+        switch(vis.chartType){
+            case "table": renderJsonTable(vis.data); break;
+            case "bar": renderBarChart(vis.data, vis.config); break;
+            case "line": renderLineChart(vis.data, vis.config); break;
+            case "map": renderMap(vis.data, vis.config); break;
+        }
+    }
+
+    let currentChart = null; // keep track of active chart
+
+    function renderBarChart(data, config){
+        const ctx = document.getElementById("chart-canvas") || createChartCanvas();
+
+        // Destroy previous chart if it exists
+        if (currentChart) {
+            currentChart.destroy();
+        }
+
+        currentChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.map(d => d[config.x]),
+                datasets: [{ label: config.title, data: data.map(d => d[config.y]) }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false
+            }
+        });
+    }
+
+
+    function createChartCanvas(){
+        const container = document.getElementById("visualization");
+
+        // Remove old canvas
+        const oldCanvas = document.getElementById("chart-canvas");
+        if (oldCanvas) container.removeChild(oldCanvas);
+
+        // Remove placeholder
+        const placeholder = container.querySelector(".placeholder");
+        if (placeholder) container.removeChild(placeholder);
+
+        const canvas = document.createElement("canvas");
+        canvas.id = "chart-canvas";
+        canvas.style.width = "100%";
+        canvas.style.height = "300px"; // fixed height to make it visible
+        container.appendChild(canvas);
+        return canvas;
+    }
+
+
+
+
     
     // -------------------- Start Scenario --------------------
     startScenarioBtn.addEventListener('click', async () => {
